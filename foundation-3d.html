@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sindbad Gate Foundation 3D</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1c232d; color: #e8edf2; font: 14px/1.4 system-ui, "Segoe UI", sans-serif; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+  #panel { position: fixed; top: 12px; left: 12px; background: rgba(20, 26, 34, .88); border: 1px solid #36414f; border-radius: 8px; padding: 10px 12px; max-width: 280px; }
+  #panel h1 { font-size: 15px; margin: 0 0 8px; }
+  #panel .row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  button { background: #2b3644; color: #e8edf2; border: 1px solid #47566a; border-radius: 6px; padding: 5px 9px; font: inherit; cursor: pointer; }
+  button:hover { background: #38475a; }
+  label { display: flex; align-items: center; gap: 6px; margin: 2px 0; cursor: pointer; }
+  .sw { width: 11px; height: 11px; border-radius: 2px; display: inline-block; flex: none; }
+  .info { font-size: 12px; color: #9fb0c2; margin-top: 8px; }
+  #hint { position: fixed; bottom: 10px; left: 12px; right: 12px; color: #9fb0c2; font-size: 12.5px; }
+  #err { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; padding: 24px; text-align: center; }
+</style>
+</head>
+<body>
+<div id="panel">
+  <h1>The Sindbad Gate - foundation (one of two)</h1>
+  <div class="row">
+    <button data-v="iso">3D</button><button data-v="front">Front</button><button data-v="side">Side</button>
+    <button data-v="top">Top</button><button data-v="below">From below</button>
+  </div>
+  <label><input type="checkbox" data-g="conc" checked><span class="sw" style="background:#a9a59c"></span>Concrete 3100 x 2600 x 3000 (see-through)</label>
+  <label><input type="checkbox" data-g="rebar" checked><span class="sw" style="background:#d23a32"></span>Reinforcement: 3 mesh layers, bars at 400</label>
+  <label><input type="checkbox" data-g="frame" checked><span class="sw" style="background:#2f6fd6"></span>Anchor-bolt setting frame</label>
+  <label><input type="checkbox" data-g="bolts" checked><span class="sw" style="background:#2bb3b3"></span>12 anchor bolts M24, 2000 deep</label>
+  <label><input type="checkbox" data-g="plate" checked><span class="sw" style="background:#c85fc8"></span>Hollow base plate 300 wide x 25</label>
+  <label><input type="checkbox" data-g="legs" checked><span class="sw" style="background:#4fb6c9"></span>Column leg stubs</label>
+  <label><input type="checkbox" data-g="misc" checked><span class="sw" style="background:#e7e3d8"></span>Ducts, spacers, plastic sheet</label>
+  <label><input type="checkbox" data-g="ground" checked><span class="sw" style="background:#7d6a4f"></span>Ground level</label>
+  <div class="info">Plinth top 250 above ground, underside 2750 below. Mesh layers 375 above the underside, mid-way, and 575 below the top. Bolts: one at each corner plus 2 front, 2 back and 2 on each side.</div>
+</div>
+<div id="hint">Drag to rotate &middot; scroll or pinch to zoom &middot; right-drag (or Shift + drag) to move</div>
+<div id="err">The 3D engine could not be loaded. This page needs an internet connection the first time it opens.</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+if (!window.THREE) { document.getElementById('err').style.display = 'flex'; }
+else (function () {
+  // dimensions in metres, origin at the plan centre, y = 0 at ground level
+  var LX = 3.1, LZ = 2.6, YB = -2.75, YT = 0.25, C = 0.075, HX = LX / 2, HZ = LZ / 2;
+  var LEGX = 1.175, LEGZ = 0.925, PW = 0.3, PT = 0.025, BTOP = YT + 0.45, BBOT = YT - 2.0, HOOK = 0.15;
+  function V(x, y, z) { return new THREE.Vector3(x, y, z); }
+  function lin(h) { return new THREE.Color(h).convertSRGBToLinear(); }
+
+  var scene = new THREE.Scene(); scene.background = new THREE.Color(0x1c232d);
+  var G = {}; ['conc', 'rebar', 'frame', 'bolts', 'plate', 'legs', 'misc', 'ground'].forEach(function (k) { G[k] = new THREE.Group(); scene.add(G[k]); });
+  function mat(c, o) { var m = new THREE.MeshStandardMaterial({ color: lin(c), roughness: 0.6, metalness: 0.3 }); if (o) { m.transparent = true; m.opacity = o; m.depthWrite = false; } return m; }
+  var M = { conc: mat(0xa9a59c, 0.22), rebar: mat(0xd23a32), frame: mat(0x2f6fd6), bolts: mat(0x2bb3b3), plate: mat(0xc85fc8), legs: mat(0x4fb6c9), duct: mat(0xe7e3d8), spacer: mat(0x8f8a80), sheet: mat(0xd8c24a, 0.45), ground: mat(0x7d6a4f, 0.35) };
+  M.rebar.metalness = 0.5; M.bolts.metalness = 0.8;
+
+  function bar(a, b, r, m, g) {
+    var d = b.clone().sub(a), len = d.length(), mesh = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 8), m);
+    mesh.position.copy(a).addScaledVector(d, 0.5); mesh.quaternion.setFromUnitVectors(V(0, 1, 0), d.normalize()); g.add(mesh); return mesh;
+  }
+  function box(x0, x1, y0, y1, z0, z1, m, g) { var b = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0), m); b.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2); g.add(b); return b; }
+  function pos(a, b, step) { var out = [], x = a; while (x <= b - 0.05) { out.push(x); x += step; } if (b - out[out.length - 1] > 0.001) out.push(b); return out; }
+
+  // ---- concrete block with visible edges ----
+  var cb = box(-HX, HX, YB, YT, -HZ, HZ, M.conc, G.conc);
+  var edges = new THREE.LineSegments(new THREE.EdgesGeometry(cb.geometry), new THREE.LineBasicMaterial({ color: 0xcfcac0 })); edges.position.copy(cb.position); G.conc.add(edges);
+
+  // ---- reinforcement: 3 mesh layers (bottom, middle, top), 16 mm bars at 400 both ways ----
+  var r = 0.008, x0 = -HX + C, x1 = HX - C, z0 = -HZ + C, z1 = HZ - C, yb = YB + C + r, yt = YT - C - r, layers = [yb + 0.3, (yb + 0.3 + yt - 0.5) / 2, yt - 0.5];
+  var xs = pos(x0, x1, 0.4), zs = pos(z0, z1, 0.4);
+  layers.forEach(function (y, li) {
+    xs.forEach(function (x) { bar(V(x, y, z0), V(x, y, z1), r, M.rebar, G.rebar); });
+    zs.forEach(function (z) { bar(V(x0, y + 2 * r, z), V(x1, y + 2 * r, z), r, M.rebar, G.rebar); });
+  });
+  // bottom bars bent up 600 into the side walls
+  zs.forEach(function (z) { [x0, x1].forEach(function (x) { bar(V(x, yb + 0.3 + 2 * r, z), V(x, yb + 0.9, z), r, M.rebar, G.rebar); }); });
+  xs.forEach(function (x) { [z0, z1].forEach(function (z) { bar(V(x, yb + 0.3, z), V(x, yb + 0.9, z), r, M.rebar, G.rebar); }); });
+  // side walls: vertical bars at 400 on all four faces, tied to every layer
+  var vx = x0 + 0.02, vx1 = x1 - 0.02, vz = z0 + 0.02, vz1 = z1 - 0.02;
+  pos(x0, x1, 0.4).forEach(function (x) { bar(V(x, yb, vz), V(x, yt, vz), r, M.rebar, G.rebar); bar(V(x, yb, vz1), V(x, yt, vz1), r, M.rebar, G.rebar); });
+  pos(z0, z1, 0.4).forEach(function (z) { bar(V(vx, yb, z), V(vx, yt, z), r, M.rebar, G.rebar); bar(V(vx1, yb, z), V(vx1, yt, z), r, M.rebar, G.rebar); });
+
+  // ---- anchor-bolt setting frame: angle ring through the leg lines on 4 legs to the bottom ----
+  var fy = 0.06, fw = 0.075;
+  box(-LEGX - fw / 2, LEGX + fw / 2, fy - 0.035, fy + 0.035, LEGZ - fw / 2, LEGZ + fw / 2, M.frame, G.frame);
+  box(-LEGX - fw / 2, LEGX + fw / 2, fy - 0.035, fy + 0.035, -LEGZ - fw / 2, -LEGZ + fw / 2, M.frame, G.frame);
+  box(LEGX - fw / 2, LEGX + fw / 2, fy - 0.035, fy + 0.035, -LEGZ, LEGZ, M.frame, G.frame);
+  box(-LEGX - fw / 2, -LEGX + fw / 2, fy - 0.035, fy + 0.035, -LEGZ, LEGZ, M.frame, G.frame);
+  [[-1, -1], [-1, 1], [1, -1], [1, 1]].forEach(function (s) { box(s[0] * LEGX - 0.035, s[0] * LEGX + 0.035, YB + C, fy, s[1] * LEGZ - 0.035, s[1] * LEGZ + 0.035, M.frame, G.frame); });
+
+  // ---- 12 anchor bolts: 4 front, 4 back, 2 on each side; 2000 embedded, 90 deg hook of 150 ----
+  var bolts = [];
+  [-LEGX, -0.4, 0.4, LEGX].forEach(function (x) { bolts.push([x, LEGZ, 0, -1], [x, -LEGZ, 0, 1]); });
+  [-0.45, 0.45].forEach(function (z) { bolts.push([LEGX, z, -1, 0], [-LEGX, z, 1, 0]); });
+  bolts.forEach(function (b) {
+    bar(V(b[0], BBOT, b[1]), V(b[0], BTOP, b[1]), 0.012, M.bolts, G.bolts);
+    bar(V(b[0], BBOT, b[1]), V(b[0] + b[2] * HOOK, BBOT, b[1] + b[3] * HOOK), 0.012, M.bolts, G.bolts);
+    var w = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.012, 16), M.bolts); w.position.set(b[0], YT + PT + 0.006, b[1]); G.bolts.add(w);
+    var n = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.024, 0.03, 6), M.bolts); n.position.set(b[0], YT + PT + 0.027, b[1]); G.bolts.add(n);
+  });
+
+  // ---- hollow square base plate on top of the plinth: 300 wide, 25 thick ----
+  var ox = LEGX + PW / 2, oz = LEGZ + PW / 2, ix = LEGX - PW / 2, iz = LEGZ - PW / 2, py0 = YT, py1 = YT + PT;
+  box(-ox, ox, py0, py1, iz, oz, M.plate, G.plate); box(-ox, ox, py0, py1, -oz, -iz, M.plate, G.plate);
+  box(ix, ox, py0, py1, -iz, iz, M.plate, G.plate); box(-ox, -ix, py0, py1, -iz, iz, M.plate, G.plate);
+
+  // ---- column leg stubs (150 IPE shown as 150 square) standing on the plate ----
+  [[-1, -1], [-1, 1], [1, -1], [1, 1]].forEach(function (s) { box(s[0] * LEGX - 0.075, s[0] * LEGX + 0.075, py1, py1 + 0.8, s[1] * LEGZ - 0.075, s[1] * LEGZ + 0.075, M.legs, G.legs); });
+
+  // ---- ducts, spacers, plastic sheet ----
+  [-0.15, 0.15].forEach(function (x) { var d = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.5, 16, 1, true), M.duct); d.position.set(x, -0.15, 0); G.misc.add(d); });
+  [-HX + 0.45, 0, HX - 0.45].forEach(function (x) { [-HZ + 0.45, 0, HZ - 0.45].forEach(function (z) { box(x - 0.05, x + 0.05, YB, YB + C, z - 0.05, z + 0.05, M.spacer, G.misc); }); });
+  box(-HX - 0.15, HX + 0.15, YB - 0.04, YB - 0.035, -HZ - 0.15, HZ + 0.15, M.sheet, G.misc);
+
+  // ---- ground level ring ----
+  var gs = new THREE.Shape(); gs.moveTo(-6, -6); gs.lineTo(6, -6); gs.lineTo(6, 6); gs.lineTo(-6, 6); gs.closePath();
+  var hole = new THREE.Path(); hole.moveTo(-HX, -HZ); hole.lineTo(-HX, HZ); hole.lineTo(HX, HZ); hole.lineTo(HX, -HZ); hole.closePath(); gs.holes.push(hole);
+  var gm = new THREE.Mesh(new THREE.ShapeGeometry(gs), M.ground); gm.material.side = THREE.DoubleSide; gm.rotation.x = -Math.PI / 2; G.ground.add(gm);
+  var grid = new THREE.GridHelper(12, 24, 0x4a586a, 0x353f4c); grid.position.y = -0.001; G.ground.add(grid);
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x3a4250, 0.9));
+  var sun = new THREE.DirectionalLight(0xffffff, 0.75); sun.position.set(6, 10, 8); scene.add(sun);
+  var sun2 = new THREE.DirectionalLight(0xffffff, 0.3); sun2.position.set(-6, -4, -8); scene.add(sun2);
+
+  var renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2)); renderer.outputEncoding = THREE.sRGBEncoding;
+  document.body.insertBefore(renderer.domElement, document.body.firstChild);
+  var cam = new THREE.PerspectiveCamera(40, 1, 0.05, 200);
+  var tgt = V(0, -1.2, 0), th = 0.7, ph = 1.15, rad = 9, dirty = true;
+  var VIEWS = { iso: [0.7, 1.15, 9], front: [0, 1.57, 8.5], side: [Math.PI / 2, 1.57, 8.5], top: [0, 0.02, 8], below: [0.7, 2.3, 9] };
+  function place() { cam.position.set(tgt.x + rad * Math.sin(ph) * Math.sin(th), tgt.y + rad * Math.cos(ph), tgt.z + rad * Math.sin(ph) * Math.cos(th)); cam.lookAt(tgt); dirty = true; }
+  function resize() { var w = window.innerWidth, h = window.innerHeight; renderer.setSize(w, h); cam.aspect = w / h; cam.updateProjectionMatrix(); dirty = true; }
+  window.addEventListener('resize', resize); resize(); place();
+  var el = renderer.domElement, pts = {}, pinch = 0;
+  el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  el.addEventListener('pointerdown', function (e) { el.setPointerCapture(e.pointerId); pts[e.pointerId] = { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.shiftKey }; pinch = 0; });
+  function drop(e) { delete pts[e.pointerId]; pinch = 0; }
+  el.addEventListener('pointerup', drop); el.addEventListener('pointercancel', drop);
+  el.addEventListener('pointermove', function (e) {
+    var p = pts[e.pointerId]; if (!p) return; var dx = e.clientX - p.x, dy = e.clientY - p.y; p.x = e.clientX; p.y = e.clientY; var ids = Object.keys(pts);
+    if (ids.length === 2) { var a = pts[ids[0]], b = pts[ids[1]], d = Math.hypot(a.x - b.x, a.y - b.y); if (pinch) rad = Math.max(1.5, Math.min(40, rad * pinch / d)); pinch = d; }
+    else if (p.pan) { var k = rad * 0.0012, right = V(Math.cos(th), 0, -Math.sin(th)); tgt.addScaledVector(right, -dx * k); tgt.y += dy * k; }
+    else { th -= dx * 0.006; ph = Math.max(0.02, Math.min(Math.PI - 0.02, ph - dy * 0.006)); }
+    place();
+  });
+  el.addEventListener('wheel', function (e) { e.preventDefault(); rad = Math.max(1.5, Math.min(40, rad * (e.deltaY > 0 ? 1.1 : 0.9))); place(); }, { passive: false });
+  document.querySelectorAll('button[data-v]').forEach(function (b) { b.addEventListener('click', function () { var v = VIEWS[b.dataset.v]; th = v[0]; ph = v[1]; rad = v[2]; tgt.set(0, -1.2, 0); place(); }); });
+  document.querySelectorAll('input[data-g]').forEach(function (c) { c.addEventListener('change', function () { G[c.dataset.g].visible = c.checked; dirty = true; }); });
+  (function loop() { if (dirty) { renderer.render(scene, cam); dirty = false; } requestAnimationFrame(loop); })();
+})();
+</script>
+</body>
+</html>
